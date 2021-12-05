@@ -27,11 +27,12 @@ impl TimeseriesLocalDatabase {
         };
     }
 
-    pub fn put(&mut self, m: Measurement) {
+    pub fn put(&mut self, m: Measurement) -> Result<i64, String> {
         let utc: DateTime<Utc> = Utc::now();
         let ts = format!("{}", utc.timestamp());
         let payload: Vec<u8> = bincode::serialize(&m).unwrap();
-        self.db.put(ts, payload).unwrap();
+        self.db.put(ts.clone(), payload).unwrap();
+        Ok(utc.clone().timestamp())
     }
 
     pub fn get(&mut self, key: i64) -> Result<Measurement, String> {
@@ -42,6 +43,13 @@ impl TimeseriesLocalDatabase {
             }
             Ok(None) => Err(format!("value not found")),
             Err(e) => Err(format!("query error: {}", e)),
+        }
+    }
+
+    pub fn _delete(&mut self, key: i64) -> Result<(), String> {
+        match self.db.delete(format!("{}", key.clone())) {
+            Ok(_a) => Ok(()),
+            Err(e) => Err(format!("delete error: {}", e)),
         }
     }
 
@@ -61,8 +69,18 @@ impl TimeseriesLocalDatabase {
         self._get_absolute_range(start_dt, end_dt)
     }
 
-    pub fn destroy(&mut self) {
+    pub fn destroy(&mut self, remove_dir: bool) {
         let _ = DB::destroy(&Options::default(), self.dbpath.clone());
+        if remove_dir {
+            match std::fs::remove_dir_all(self.dbpath.clone()) {
+                Ok(f) => {
+                    println!("db removed: {:?}", f);
+                }
+                Err(e) => {
+                    println!("Error removing db {}: {}", self.dbpath, e);
+                }
+            }
+        }
     }
 
     fn _get_absolute_range(
@@ -93,5 +111,86 @@ impl TimeseriesLocalDatabase {
             }
         }
         Ok(mv)
+    }
+}
+
+#[cfg(test)]
+
+mod tests {
+    #[test]
+    fn test_db_creation() {
+        let path = "_path_for_test1_rocksdb_storage";
+        let mut tsdb = crate::tsdb::TimeseriesLocalDatabase::new(path.to_string());
+        assert!(std::path::Path::new(path).is_dir());
+        tsdb.destroy(true);
+    }
+    #[test]
+    fn test_db_destroy() {
+        let path = "_path_for_test2_rocksdb_storage";
+        let mut tsdb = crate::tsdb::TimeseriesLocalDatabase::new(path.to_string());
+        tsdb.destroy(true); // remove dir
+        assert!(!std::path::Path::new(path).is_dir());
+    }
+    #[test]
+    fn test_db_put_and_get() {
+        let path = "_path_for_test3_rocksdb_storage";
+        let mut tsdb = crate::tsdb::TimeseriesLocalDatabase::new(path.to_string());
+        let m = crate::tsdb::Measurement {
+            name: "test".to_string(),
+            value: 0.1,
+            creation_date: chrono::Utc::now().timestamp(),
+        };
+        let key = tsdb.put(m.clone()).unwrap();
+        let mv = tsdb.get(key).unwrap();
+        assert_eq!(m.value, mv.value);
+        tsdb._delete(key).unwrap();
+        tsdb.destroy(true);
+    }
+    #[test]
+    fn test_absolute_ts_range() {
+        let path = "_path_for_test4_rocksdb_storage";
+        let mut tsdb = crate::tsdb::TimeseriesLocalDatabase::new(path.to_string());
+        let utc: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        for a in 0..4 {
+            let ts = (utc + chrono::Duration::seconds(a)).timestamp();
+            let m = crate::tsdb::Measurement {
+                name: format!("name-{}", a),
+                value: 1.0,
+                creation_date: ts,
+            };
+            tsdb.put(m.clone()).unwrap();
+            let sl = std::time::Duration::from_secs(2);
+            std::thread::sleep(sl);
+        }
+
+        let end_range = utc + chrono::Duration::seconds(3); // 3 second range should have 2 measures: utc + 3
+        let range = tsdb
+            .get_absolute_range(utc.timestamp(), end_range.timestamp())
+            .unwrap();
+        assert_eq!(range.len(), 2);
+        tsdb.destroy(true);
+    }
+    #[test]
+    fn test_relative_ts_range() {
+        let path = "_path_for_test5_rocksdb_storage";
+        let mut tsdb = crate::tsdb::TimeseriesLocalDatabase::new(path.to_string());
+        let utc: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        for a in 0..4 {
+            let ts = (utc + chrono::Duration::seconds(a)).timestamp();
+            let m = crate::tsdb::Measurement {
+                name: format!("name-{}", a),
+                value: 1.0,
+                creation_date: ts,
+            };
+            tsdb.put(m.clone()).unwrap();
+            let sl = std::time::Duration::from_secs(2);
+            std::thread::sleep(sl);
+        }
+
+        let range = tsdb
+            .get_relative_range_in_seconds(utc.timestamp(), 3)
+            .unwrap();
+        assert_eq!(range.len(), 2);
+        tsdb.destroy(true);
     }
 }

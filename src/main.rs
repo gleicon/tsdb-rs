@@ -14,7 +14,7 @@ fn main() {
             value: 1.0,
             creation_date: Utc::now().timestamp(),
         };
-        tsdb.put(m.clone());
+        tsdb.put(m.clone()).unwrap();
         let sl = time::Duration::from_secs(2);
         thread::sleep(sl);
     }
@@ -33,5 +33,5 @@ fn main() {
 
     let range = tsdb.get_relative_range_in_seconds(utc.timestamp(), 60);
     println!("range for {} + 60 secs {:?}", utc.timestamp(), range);
-    tsdb.destroy();
+    tsdb.destroy(false)
 }
